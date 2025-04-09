@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cute 3D Image Gallery</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap');
+        
+        body { 
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Comic Neue', cursive;
+            background: linear-gradient(to bottom, #c4e0f9, #f2d7ee);
+        }
+        canvas { 
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.8);
+            color: #5d7a9c;
+            padding: 15px;
+            border-radius: 15px;
+            font-size: 16px;
+            max-width: 350px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            border: 2px dashed #ffb6c1;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.9);
+            color: #5d7a9c;
+            padding: 20px;
+            border-radius: 20px;
+            font-size: 18px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border: 3px solid #a6cee3;
+        }
+        .controls {
+            position: absolute;
+            bottom: 15px;
+            left: 15px;
+            background: rgba(255,255,255,0.8);
+            color: #5d7a9c;
+            padding: 12px;
+            border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            border: 2px dashed #ffb6c1;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 15px;
+            background: #ffccd5;
+            color: #5d7a9c;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-family: 'Comic Neue', cursive;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.2s ease;
+        }
+        button:hover {
+            background: #ffd8e6;
+            transform: scale(1.05);
+        }
+        #tooltip {
+            position: absolute;
+            display: none;
+            background: rgba(255,255,255,0.9);
+            color: #5d7a9c;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 14px;
+            max-width: 200px;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border: 2px solid #a6cee3;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3>✨ Magical Image Gallery ✨</h3>
+        <p>Images floating in a cute dreamy space!</p>
+        <p>🖱️ Drag to rotate • 🖱️ Scroll to zoom • 🖱️ Right-click to pan</p>
+    </div>
+    <div class="controls">
+        <button id="reset-camera">✨ Reset View</button>
+        <button id="toggle-rotation">🌀 Toggle Spin</button>
+    </div>
+    <div id="loading">
+        <div style="font-weight: bold; margin-bottom: 10px;">✨ Summoning your images... ✨</div>
+        <span id="progress" style="color: #ff8ba7;">0%</span>
+    </div>
+    <div id="tooltip"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/stats.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.9.1/gsap.min.js"></script>
+
+    <script>
+        // ===== Main Scene Setup =====
+        let scene, camera, renderer, controls;
+        let imagePlanes = [];
+        let autoRotate = false;
+        let loadedItemCount = 0;
+        let totalItems = 0;
+        let raycaster, mouse;
+        let selectedObject = null;
+        let tooltipElement;
+        let clouds = [];
+        let stars = [];
+        let shootingStars = []; // Array to hold shooting stars
+        let floatingStars = []; // Array to hold floating stars
+        let gridBox; // Reference to the grid box
+
+        // Define cluster colors - pastel/cute colors
+        const clusterColors = [
+            0xffb6c1, // Light pink
+            0xa6e7ff, // Light blue
+            0xbaffc9, // Light green
+            0xffffba, // Light yellow
+            0xe2baff, // Light purple
+            0xffcba4, // Light orange
+            0xc4e0f9, // Pastel blue
+            0xf2d7ee  // Pastel purple
+        ];
+
+        // Initialize the scene
+        function init() {
+            // Load image data from JSON
+            fetch('image_data.json')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    setupScene();
+                    loadImagesFromData(data);
+                })
+                .catch(error => {
+                    console.error('Error loading image data:', error);
+                    document.getElementById('progress').textContent = 'Error loading data';
+                });
+                
+            // Initialize tooltip
+            tooltipElement = document.getElementById('tooltip');
+        }
+
+        // Setup Three.js scene
+        function setupScene() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xe8f4fc); // Soft sky blue
+            
+            // Create fog for depth
+            scene.fog = new THREE.FogExp2(0xe8f4fc, 0.035);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(
+                75, 
+                window.innerWidth / window.innerHeight, 
+                0.1, 
+                1000
+            );
+            camera.position.z = 3;
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+
+            // Add directional light for soft shadows
+            const directionalLight = new THREE.DirectionalLight(0xffe0e6, 0.8); // Soft pink light
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+            
+            // Add a second directional light from another angle
+            const directionalLight2 = new THREE.DirectionalLight(0xd7f2ff, 0.5); // Soft blue light
+            directionalLight2.position.set(-1, 0.5, -1);
+            scene.add(directionalLight2);
+
+            // Replace grid with cute ground plane
+            const groundGeometry = new THREE.PlaneGeometry(30, 30, 1, 1);
+            const groundMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xfffbe6, // Very light yellow
+                transparent: true,
+                opacity: 0.3,
+                side: THREE.DoubleSide 
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = Math.PI / 2;
+            ground.position.y = -2;
+            scene.add(ground);
+            
+            // Add cute clouds
+            addClouds();
+            
+            // Add twinkling stars
+            addStars();
+            
+            // Initialize shooting stars
+            initShootingStars();
+            
+            // Add modern grid box
+            createModernGridBox();
+            
+            // Add floating stars
+            addFloatingStars();
+            
+            // Setup raycaster for mouse interaction
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('reset-camera').addEventListener('click', resetCamera);
+            document.getElementById('toggle-rotation').addEventListener('click', toggleRotation);
+            window.addEventListener('mousemove', onMouseMove);
+
+            // Start animation loop
+            animate();
+        }
+        
+        // Add fluffy clouds to the scene
+        function addClouds() {
+            const cloudGeometry = new THREE.SphereGeometry(0.7, 7, 7);
+            const cloudMaterial = new THREE.MeshLambertMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.8
+            });
+            
+            // Create several cloud clusters
+            for (let i = 0; i < 12; i++) {
+                const cloud = new THREE.Group();
+                
+                // Number of puffs in this cloud
+                const puffCount = 3 + Math.floor(Math.random() * 5);
+                
+                for (let j = 0; j < puffCount; j++) {
+                    const puff = new THREE.Mesh(cloudGeometry, cloudMaterial);
+                    
+                    // Position puffs to form a cloud shape
+                    puff.position.x = (Math.random() - 0.5) * 0.8;
+                    puff.position.y = (Math.random() - 0.5) * 0.5;
+                    puff.position.z = (Math.random() - 0.5) * 0.8;
+                    
+                    // Random scaling
+                    const scale = 0.4 + Math.random() * 0.6;
+                    puff.scale.set(scale, scale, scale);
+                    
+                    cloud.add(puff);
+                }
+                
+                // Position the cloud in the scene
+                cloud.position.x = (Math.random() - 0.5) * 20;
+                cloud.position.y = -1 + Math.random() * 4;
+                cloud.position.z = (Math.random() - 0.5) * 20;
+                
+                scene.add(cloud);
+                clouds.push(cloud);
+            }
+        }
+        
+        // Add twinkling stars
+        function addStars() {
+            const starGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+            const starMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            
+            for (let i = 0; i < 200; i++) {
+                const star = new THREE.Mesh(starGeometry, starMaterial);
+                
+                // Random position spread throughout the scene
+                star.position.x = (Math.random() - 0.5) * 40;
+                star.position.y = (Math.random() - 0.5) * 40; 
+                star.position.z = (Math.random() - 0.5) * 40;
+                
+                // Keep track of original scale for twinkling
+                star.userData = {
+                    originalScale: 0.5 + Math.random() * 1.5,
+                    twinkleSpeed: 0.01 + Math.random() * 0.05,
+                    twinklePhase: Math.random() * Math.PI * 2
+                };
+                
+                star.scale.set(
+                    star.userData.originalScale,
+                    star.userData.originalScale,
+                    star.userData.originalScale
+                );
+                
+                scene.add(star);
+                stars.push(star);
+            }
+        }
+
+        // Add shooting stars that appear randomly
+        function initShootingStars() {
+            // Create shooting star pool
+            for (let i = 0; i < 5; i++) {
+                createShootingStar(true);
+            }
+            
+            // Periodically trigger new shooting stars
+            setInterval(() => {
+                // Only create a new one if we're below the limit
+                if (Math.random() < 0.3 && shootingStars.length < 5) {
+                    createShootingStar(false);
+                }
+            }, 2000);
+        }
+        
+        // Create a single shooting star
+        function createShootingStar(initializing = false) {
+            // Create the shooting star group
+            const shootingStar = new THREE.Group();
+            
+            // Create the main star (head)
+            const starGeometry = new THREE.SphereGeometry(0.08, 8, 8);
+            const starMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.9
+            });
+            const starHead = new THREE.Mesh(starGeometry, starMaterial);
+            shootingStar.add(starHead);
+            
+            // Create the trail
+            const trailGeometry = new THREE.BufferGeometry();
+            const trailMaterial = new THREE.PointsMaterial({
+                color: 0xffffcc,
+                size: 0.06,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true
+            });
+            
+            // Create trail points
+            const trailPoints = [];
+            for (let i = 0; i < 20; i++) {
+                trailPoints.push(0, 0, 0); // Will be updated in animation
+            }
+            
+            trailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(trailPoints, 3));
+            const trail = new THREE.Points(trailGeometry, trailMaterial);
+            shootingStar.add(trail);
+            
+            // Position at random edge of the scene
+            const side = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
+            const boundarySize = 25;
+            
+            let startX, startY, startZ;
+            let endX, endY, endZ;
+            let speed = 0.1 + Math.random() * 0.2;
+            
+            if (side === 0) { // Top
+                startX = (Math.random() - 0.5) * boundarySize * 2;
+                startY = boundarySize;
+                startZ = (Math.random() - 0.5) * boundarySize * 2;
+                
+                endX = startX + (Math.random() - 0.5) * boundarySize;
+                endY = -boundarySize;
+                endZ = startZ + (Math.random() - 0.5) * boundarySize;
+            } else if (side === 1) { // Right
+                startX = boundarySize;
+                startY = (Math.random() - 0.5) * boundarySize * 2;
+                startZ = (Math.random() - 0.5) * boundarySize * 2;
+                
+                endX = -boundarySize;
+                endY = startY + (Math.random() - 0.5) * boundarySize;
+                endZ = startZ + (Math.random() - 0.5) * boundarySize;
+            } else if (side === 2) { // Bottom
+                startX = (Math.random() - 0.5) * boundarySize * 2;
+                startY = -boundarySize;
+                startZ = (Math.random() - 0.5) * boundarySize * 2;
+                
+                endX = startX + (Math.random() - 0.5) * boundarySize;
+                endY = boundarySize;
+                endZ = startZ + (Math.random() - 0.5) * boundarySize;
+            } else { // Left
+                startX = -boundarySize;
+                startY = (Math.random() - 0.5) * boundarySize * 2;
+                startZ = (Math.random() - 0.5) * boundarySize * 2;
+                
+                endX = boundarySize;
+                endY = startY + (Math.random() - 0.5) * boundarySize;
+                endZ = startZ + (Math.random() - 0.5) * boundarySize;
+            }
+            
+            // Set the position and store animation data
+            shootingStar.position.set(startX, startY, startZ);
+            
+            // Store animation data in userData
+            shootingStar.userData = {
+                startPosition: new THREE.Vector3(startX, startY, startZ),
+                endPosition: new THREE.Vector3(endX, endY, endZ),
+                speed: speed,
+                progress: 0,
+                trailPositions: [],
+                isActive: true
+            };
+            
+            // If we're initializing, position some randomly along their paths
+            if (initializing) {
+                shootingStar.userData.progress = Math.random();
+                updateShootingStarPosition(shootingStar);
+            }
+            
+            // Add to scene and array
+            scene.add(shootingStar);
+            shootingStars.push(shootingStar);
+            
+            return shootingStar;
+        }
+        
+        // Update shooting star position
+        function updateShootingStarPosition(shootingStar) {
+            const data = shootingStar.userData;
+            
+            // Linear interpolation between start and end positions
+            shootingStar.position.lerpVectors(
+                data.startPosition,
+                data.endPosition,
+                data.progress
+            );
+            
+            // Store current position in trail history
+            if (data.trailPositions.length >= 20) {
+                data.trailPositions.shift(); // Remove oldest position
+            }
+            data.trailPositions.push(shootingStar.position.clone());
+            
+            // Update trail geometry
+            if (data.trailPositions.length > 0) {
+                const trail = shootingStar.children[1];
+                const positions = trail.geometry.attributes.position.array;
+                
+                // Fill with current positions
+                for (let i = 0; i < data.trailPositions.length; i++) {
+                    const pos = data.trailPositions[i];
+                    
+                    // Convert to local coordinates
+                    const localPos = pos.clone().sub(shootingStar.position);
+                    
+                    positions[i * 3] = localPos.x;
+                    positions[i * 3 + 1] = localPos.y;
+                    positions[i * 3 + 2] = localPos.z;
+                }
+                
+                // Fill remainder with the same last position
+                for (let i = data.trailPositions.length; i < 20; i++) {
+                    positions[i * 3] = positions[(data.trailPositions.length - 1) * 3];
+                    positions[i * 3 + 1] = positions[(data.trailPositions.length - 1) * 3 + 1];
+                    positions[i * 3 + 2] = positions[(data.trailPositions.length - 1) * 3 + 2];
+                }
+                
+                trail.geometry.attributes.position.needsUpdate = true;
+            }
+        }
+
+        // Load images from JSON data
+        function loadImagesFromData(imageData) {
+            totalItems = imageData.length;
+            
+            // Normalize coordinates to fit within our scene
+            const coords = imageData.map(item => item.coordinates);
+            const allCoords = coords.flat();
+            const minVal = Math.min(...allCoords);
+            const maxVal = Math.max(...allCoords);
+            const range = maxVal - minVal;
+            
+            // Scale factor to adjust the spread of points in 3D space
+            const scaleFactor = 5 / range;
+            const planeSize = 0.5;  // Size of image planes
+            
+            imageData.forEach((item, index) => {
+                // Create image from base64 data
+                const texture = new THREE.TextureLoader().load(
+                    item.image,
+                    function() {
+                        loadedItemCount++;
+                        updateLoadingProgress();
+                    },
+                    undefined,
+                    function(err) {
+                        console.error('Error loading texture', err);
+                        loadedItemCount++;
+                        updateLoadingProgress();
+                    }
+                );
+                
+                // Create plane with image texture
+                const material = new THREE.MeshBasicMaterial({ 
+                    map: texture,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.9
+                });
+                
+                const geometry = new THREE.PlaneGeometry(planeSize, planeSize);
+                const plane = new THREE.Mesh(geometry, material);
+                
+                // Position based on normalized embedding coordinates
+                const [x, y, z] = item.coordinates;
+                plane.position.set(
+                    x * scaleFactor, 
+                    y * scaleFactor, 
+                    z * scaleFactor
+                );
+                
+                // Add to scene
+                scene.add(plane);
+                
+                // Add a rounded frame for the cluster with cute style
+                const frameSize = planeSize * 1.1;
+                const frameGeometry = new THREE.EdgesGeometry(
+                    (typeof THREE.RoundedBoxGeometry === 'function') ? 
+                    new THREE.RoundedBoxGeometry(frameSize, frameSize, 0.01, 2, 0.1) : 
+                    new THREE.PlaneGeometry(frameSize, frameSize) // Fallback if RoundedBoxGeometry not available
+                );
+                const frameMaterial = new THREE.LineBasicMaterial({ 
+                    color: clusterColors[item.cluster % clusterColors.length],
+                    linewidth: 3
+                });
+                const frame = new THREE.LineSegments(frameGeometry, frameMaterial);
+                
+                // Position frame at same position as image plane
+                frame.position.copy(plane.position);
+                
+                // Store reference to the image data
+                plane.userData = { 
+                    index,
+                    path: item.path,
+                    cluster: item.cluster,
+                    originalY: plane.position.y, // Store original Y for floating animation
+                    floatSpeed: 0.001 + Math.random() * 0.001, // Random speed for floating effect
+                    floatOffset: Math.random() * Math.PI * 2 // Random offset for floating
+                };
+                
+                scene.add(frame);
+                imagePlanes.push({ plane, frame });
+            });
+        }
+
+        // Handle mouse move for object hover/selection
+        function onMouseMove(event) {
+            // Convert mouse position to normalized device coordinates
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+            
+            // Update tooltip position
+            tooltipElement.style.left = event.clientX + 10 + 'px';
+            tooltipElement.style.top = event.clientY + 10 + 'px';
+        }
+
+        // Update loading progress indicator
+        function updateLoadingProgress() {
+            const progress = Math.round((loadedItemCount / totalItems) * 100);
+            document.getElementById('progress').textContent = `${progress}% ✨`;
+            
+            if (loadedItemCount >= totalItems) {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            controls.update();
+            
+            if (autoRotate) {
+                scene.rotation.y += 0.002; // Slower rotation for gentler feel
+            }
+            
+            // Animate floating image planes
+            imagePlanes.forEach(({ plane, frame }) => {
+                if (plane.userData) {
+                    // Gentle floating animation
+                    const floatY = Math.sin(Date.now() * plane.userData.floatSpeed + plane.userData.floatOffset) * 0.05;
+                    plane.position.y = plane.userData.originalY + floatY;
+                    frame.position.y = plane.position.y;
+                    
+                    // Gentle rotation
+                    plane.rotation.z = Math.sin(Date.now() * 0.0005 + plane.userData.floatOffset) * 0.03;
+                    frame.rotation.z = plane.rotation.z;
+                }
+            });
+            
+            // Animate clouds
+            clouds.forEach((cloud, i) => {
+                // Gentle floating and drifting
+                cloud.position.x += Math.sin(Date.now() * 0.0001 + i) * 0.002;
+                cloud.position.y += Math.cos(Date.now() * 0.0002 + i) * 0.001;
+            });
+            
+            // Animate stars (twinkling)
+            stars.forEach(star => {
+                const { originalScale, twinkleSpeed, twinklePhase } = star.userData;
+                const scale = originalScale * (0.7 + 0.3 * Math.sin(Date.now() * twinkleSpeed + twinklePhase));
+                star.scale.set(scale, scale, scale);
+            });
+            
+            // Animate shooting stars
+            const shootingStarsToRemove = [];
+            shootingStars.forEach(shootingStar => {
+                if (shootingStar.userData.isActive) {
+                    // Update progress
+                    shootingStar.userData.progress += shootingStar.userData.speed * 0.01;
+                    
+                    // Update position
+                    updateShootingStarPosition(shootingStar);
+                    
+                    // Check if it reached the end
+                    if (shootingStar.userData.progress >= 1) {
+                        // Mark for removal
+                        shootingStar.userData.isActive = false;
+                        shootingStarsToRemove.push(shootingStar);
+                    }
+                }
+            });
+            
+            // Remove finished shooting stars
+            shootingStarsToRemove.forEach(shootingStar => {
+                scene.remove(shootingStar);
+                const index = shootingStars.indexOf(shootingStar);
+                if (index !== -1) {
+                    shootingStars.splice(index, 1);
+                }
+            });
+            
+            // Animate floating stars
+            floatingStars.forEach((star, i) => {
+                const data = star.userData;
+                
+                // Rotate the star
+                star.rotation.x += data.rotationSpeed.x;
+                star.rotation.y += data.rotationSpeed.y;
+                star.rotation.z += data.rotationSpeed.z;
+                
+                // Pulse size effect
+                const pulseScale = 0.8 + 0.3 * Math.sin(Date.now() * data.pulseSpeed + data.pulsePhase);
+                star.scale.set(pulseScale, pulseScale, pulseScale);
+                
+                // Drift movement using sine curves for smooth back and forth motion
+                const timeOffset = Date.now() - data.driftTime;
+                star.position.x = data.originalPosition.x + Math.sin(timeOffset * 0.0003) * data.driftRange * data.movementSpeed.x * 20;
+                star.position.y = data.originalPosition.y + Math.sin(timeOffset * 0.0005) * data.driftRange * data.movementSpeed.y * 20;
+                star.position.z = data.originalPosition.z + Math.sin(timeOffset * 0.0004) * data.driftRange * data.movementSpeed.z * 20;
+            });
+            
+            // Animate grid box with subtle breathing effect
+            if (gridBox) {
+                const breathScale = 1 + 0.01 * Math.sin(Date.now() * 0.0005);
+                gridBox.scale.set(breathScale, breathScale, breathScale);
+            }
+            
+            // Check for object hovering
+            checkIntersection();
+            
+            renderer.render(scene, camera);
+        }
+
+        // Check for object intersection with mouse ray
+        function checkIntersection() {
+            // Update the picking ray with the camera and mouse position
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Calculate objects intersecting the picking ray
+            const intersects = raycaster.intersectObjects(scene.children);
+            
+            // Reset previously selected object
+            if (selectedObject) {
+                selectedObject.material.opacity = 0.9; // Reset to normal opacity
+                selectedObject = null;
+                tooltipElement.style.display = 'none';
+            }
+            
+            // Handle new intersection if any
+            if (intersects.length > 0) {
+                // Find the first intersected mesh that has user data
+                const intersectedObject = intersects.find(obj => 
+                    obj.object.type === 'Mesh' && obj.object.userData && obj.object.userData.path
+                );
+                
+                if (intersectedObject) {
+                    selectedObject = intersectedObject.object;
+                    // Highlight the object by increasing opacity
+                    selectedObject.material.opacity = 1.0;
+                    
+                    // Show tooltip with file path
+                    tooltipElement.textContent = selectedObject.userData.path;
+                    tooltipElement.style.display = 'block';
+                    
+                    // Add a cute bounce animation when selected
+                    gsap.to(selectedObject.scale, {
+                        x: 1.1, 
+                        y: 1.1, 
+                        z: 1.1, 
+                        duration: 0.3,
+                        yoyo: true,
+                        repeat: 1
+                    });
+                }
+            }
+        }
+
+        // Handle window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Reset camera position
+        function resetCamera() {
+            gsap.to(camera.position, {
+                x: 0,
+                y: 0, 
+                z: 3,
+                duration: 1,
+                ease: "elastic.out(1, 0.5)"
+            });
+            
+            gsap.to(scene.rotation, {
+                x: 0,
+                y: 0,
+                z: 0,
+                duration: 1,
+                ease: "power2.inOut"
+            });
+        }
+
+        // Toggle auto-rotation
+        function toggleRotation() {
+            autoRotate = !autoRotate;
+            const button = document.getElementById('toggle-rotation');
+            button.innerHTML = autoRotate ? '✋ Stop Spin' : '🌀 Toggle Spin';
+        }
+
+        // Create a modern grid box that contains all images
+        function createModernGridBox() {
+            const size = 15; // Size of the box
+            
+            // Create box group
+            gridBox = new THREE.Group();
+            
+            // Create grid lines
+            const gridLineMaterial = new THREE.LineBasicMaterial({ 
+                color: 0xb3d9ff, 
+                transparent: true, 
+                opacity: 0.2,  // Reduced opacity
+                blending: THREE.AdditiveBlending
+            });
+            
+            const gridEdgeMaterial = new THREE.LineBasicMaterial({ 
+                color: 0x84b9ff, 
+                transparent: true, 
+                opacity: 0.5,
+                linewidth: 2
+            });
+            
+            // Create a grid pattern for each face of the cube
+            const gridStep = 3; // Increased grid step size from 1 to 3
+            
+            // Create 3D grid lines throughout the volume, but fewer of them
+            for (let x = -size/2; x <= size/2; x += gridStep) {
+                for (let y = -size/2; y <= size/2; y += gridStep) {
+                    // Create Z lines (going from front to back)
+                    const zPoints = [];
+                    zPoints.push(new THREE.Vector3(x, y, -size/2));
+                    zPoints.push(new THREE.Vector3(x, y, size/2));
+                    
+                    const zGeometry = new THREE.BufferGeometry().setFromPoints(zPoints);
+                    const zLine = new THREE.Line(zGeometry, gridLineMaterial);
+                    gridBox.add(zLine);
+                }
+            }
+            
+            for (let x = -size/2; x <= size/2; x += gridStep) {
+                for (let z = -size/2; z <= size/2; z += gridStep) {
+                    // Create Y lines (going from top to bottom)
+                    const yPoints = [];
+                    yPoints.push(new THREE.Vector3(x, -size/2, z));
+                    yPoints.push(new THREE.Vector3(x, size/2, z));
+                    
+                    const yGeometry = new THREE.BufferGeometry().setFromPoints(yPoints);
+                    const yLine = new THREE.Line(yGeometry, gridLineMaterial);
+                    gridBox.add(yLine);
+                }
+            }
+            
+            for (let y = -size/2; y <= size/2; y += gridStep) {
+                for (let z = -size/2; z <= size/2; z += gridStep) {
+                    // Create X lines (going from left to right)
+                    const xPoints = [];
+                    xPoints.push(new THREE.Vector3(-size/2, y, z));
+                    xPoints.push(new THREE.Vector3(size/2, y, z));
+                    
+                    const xGeometry = new THREE.BufferGeometry().setFromPoints(xPoints);
+                    const xLine = new THREE.Line(xGeometry, gridLineMaterial);
+                    gridBox.add(xLine);
+                }
+            }
+            
+            // Create a wireframe cube for the edges
+            const edgesGeometry = new THREE.BoxGeometry(size, size, size);
+            const edges = new THREE.EdgesGeometry(edgesGeometry);
+            const edgesMesh = new THREE.LineSegments(edges, gridEdgeMaterial);
+            gridBox.add(edgesMesh);
+            
+            // Add to scene
+            scene.add(gridBox);
+        }
+        
+        // Add floating stars that move independently
+        function addFloatingStars() {
+            // Create different star types with different colors
+            const starColors = [
+                0xffffff, // White
+                0xffffcc, // Warm white
+                0xe6e6ff, // Light blue
+                0xffccf9, // Light pink
+                0xffff99  // Light yellow
+            ];
+            
+            // Create star geometries
+            const starGeometries = [
+                new THREE.SphereGeometry(0.07, 8, 8),
+                new THREE.OctahedronGeometry(0.08, 0),
+                new THREE.TetrahedronGeometry(0.08, 0)
+            ];
+            
+            // Create stars with different shapes and colors
+            for (let i = 0; i < 50; i++) {
+                const colorIndex = Math.floor(Math.random() * starColors.length);
+                const geometryIndex = Math.floor(Math.random() * starGeometries.length);
+                
+                const material = new THREE.MeshBasicMaterial({
+                    color: starColors[colorIndex],
+                    transparent: true,
+                    opacity: 0.8,
+                    side: THREE.DoubleSide
+                });
+                
+                const star = new THREE.Mesh(starGeometries[geometryIndex], material);
+                
+                // Position within the grid box with some padding
+                const boxSize = 12; // Slightly smaller than grid box
+                star.position.x = (Math.random() - 0.5) * boxSize;
+                star.position.y = (Math.random() - 0.5) * boxSize;
+                star.position.z = (Math.random() - 0.5) * boxSize;
+                
+                // Set random initial rotation
+                star.rotation.x = Math.random() * Math.PI * 2;
+                star.rotation.y = Math.random() * Math.PI * 2;
+                star.rotation.z = Math.random() * Math.PI * 2;
+                
+                // Store animation parameters in userData
+                star.userData = {
+                    rotationSpeed: {
+                        x: (Math.random() - 0.5) * 0.01,
+                        y: (Math.random() - 0.5) * 0.01,
+                        z: (Math.random() - 0.5) * 0.01
+                    },
+                    movementSpeed: {
+                        x: (Math.random() - 0.5) * 0.003,
+                        y: (Math.random() - 0.5) * 0.003,
+                        z: (Math.random() - 0.5) * 0.003
+                    },
+                    pulseSpeed: 0.001 + Math.random() * 0.005,
+                    pulsePhase: Math.random() * Math.PI * 2,
+                    originalPosition: star.position.clone(),
+                    driftRange: 0.5 + Math.random() * 1.5, // How far it can drift from original position
+                    driftTime: Date.now() + Math.random() * 10000 // Random time offset
+                };
+                
+                scene.add(star);
+                floatingStars.push(star);
+            }
+        }
+
+        // Initialize the visualization
+        init();
+    </script>
+</body>
+</html>
